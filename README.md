@@ -1,8 +1,6 @@
-# Ollama Autocoder
+# KB Autocoder
 
-A simple to use Ollama autocompletion engine with options exposed and streaming functionality
-
-![example](example.gif)
+A extension to the ollama autocoder,that adds some new commands.
 
 ## Requirements
 
@@ -12,10 +10,10 @@ A simple to use Ollama autocompletion engine with options exposed and streaming 
 
 ## How to Use
 
-1. In a text document, press space *(or any character in the `completion keys` setting)*. The option `Autocomplete with Ollama` or a preview of the first line of autocompletion will appear. Press `enter` to start generation.
-   - Alternatively, you can run the `Autocomplete with Ollama` command from the command pallete (or set a keybind).
+1. In a text document, press space *(or any character in the `completion keys` setting)*. The option `Autocomplete with KB Auto coder` or a preview of the first line of autocompletion will appear. Press `enter` to start generation.
+   - Alternatively, you can run the `Autocomplete with KB autocoder` command from the command pallete (or set a keybind).
 2. After startup, the tokens will be streamed to your cursor.
-3. To stop the generation early, press the "Cancel" button on the "Ollama Autocoder" notification or type something.
+3. To stop the generation early, press the "Cancel" button on the "Ollama Autocoder" notification.
 4. Once generation stops, the notification will disappear.
 
 ## Notes

@@ -17,9 +17,9 @@ let responsePreviewDelay: number;
 let continueInline: boolean | undefined;
 
 function updateVSConfig() {
-	VSConfig = vscode.workspace.getConfiguration("ollama-autocoder");
+	VSConfig = vscode.workspace.getConfiguration("kb-ollama-coder");
 	apiEndpoint = VSConfig.get("endpoint") || "http://localhost:11434/api/generate";
-	apiModel = VSConfig.get("model") || "openhermes2.5-mistral:7b-q4_K_M"; // The model I tested with
+	apiModel = VSConfig.get("model") || "deepseek-coder:33b-instruct";
 	apiMessageHeader = VSConfig.get("message header") || "";
 	numPredict = VSConfig.get("max tokens predicted") || 1000;
 	promptWindowSize = VSConfig.get("prompt window size") || 2000;
@@ -45,14 +45,42 @@ function messageHeaderSub(document: vscode.TextDocument) {
 	return sub;
 }
 
+const outputChannel = vscode.window.createOutputChannel('kb-autocoder');
+function logPrompt(prompt: string) {
+	outputChannel.append(prompt);
+}
+
 // internal function for autocomplete, not directly exposed
 async function autocompleteCommand(textEditor: vscode.TextEditor, cancellationToken?: vscode.CancellationToken) {
 	const document = textEditor.document;
 	const position = textEditor.selection.active;
 
+	let prompt = '';
+	// Add message header
+	prompt += `${messageHeaderSub(document)}\n\n}`
+
+	// Add other open documents
+	let others = await vscode.workspace.textDocuments;
+	others.filter((other) => other !== document);
+
+	others.forEach((otherDoc) => {
+		if( otherDoc.uri.scheme === 'file') {
+			const relativePath = vscode.workspace.asRelativePath(otherDoc.uri);
+			prompt += `// ${relativePath}\n`
+			prompt += `${otherDoc.getText()}\n\n`
+		}
+	});
+
 	// Get the current prompt
-	let prompt = document.getText(new vscode.Range(document.lineAt(0).range.start, position));
+	const relativePath = vscode.workspace.asRelativePath(document.uri);
+	prompt += `// ${relativePath}\n`
+	prompt = document.getText(new vscode.Range(document.lineAt(0).range.start, position));
+
+	// Substring to max allowed context window length
 	prompt = prompt.substring(Math.max(0, prompt.length - promptWindowSize), prompt.length);
+
+
+	logPrompt(prompt);
 
 	// Show a progress message
 	vscode.window.withProgress(
@@ -63,7 +91,7 @@ async function autocompleteCommand(textEditor: vscode.TextEditor, cancellationTo
 		},
 		async (progress, progressCancellationToken) => {
 			try {
-				progress.report({ message: "Starting model..." });
+				progress.report({ message: "Sending to ollam..." });
 
 				let axiosCancelPost: () => void;
 				const axiosCancelToken = new axios.CancelToken((c) => {
@@ -79,7 +107,7 @@ async function autocompleteCommand(textEditor: vscode.TextEditor, cancellationTo
 				// Make a request to the ollama.ai REST API
 				const response = await axios.post(apiEndpoint, {
 					model: apiModel, // Change this to the model you want to use
-					prompt: messageHeaderSub(textEditor.document) + prompt,
+					prompt: prompt,
 					stream: true,
 					raw: true,
 					options: {
@@ -99,14 +127,11 @@ async function autocompleteCommand(textEditor: vscode.TextEditor, cancellationTo
 				response.data.on('data', async (d: Uint8Array) => {
 					progress.report({ message: "Generating..." });
 
-					// Check for user input (cancel)
-					if (currentPosition.line != textEditor.selection.end.line || currentPosition.character != textEditor.selection.end.character) {
-						axiosCancelPost(); // cancel axios => cancel finished promise => close notification
-						return;
-					}
-
 					// Get a completion from the response
 					const completion: string = JSON.parse(d.toString()).response;
+
+					outputChannel.append('COMPLETION: ');
+					outputChannel.append(d.toString());
 					// lastToken = completion;
 					
 					if (completion === "") {
@@ -209,7 +234,7 @@ async function provideCompletionItems(document: vscode.TextDocument, position: v
 	item.documentation = new vscode.MarkdownString('Press `Enter` to get an autocompletion from Ollama');
 	// Set the command to trigger the completion
 	if (continueInline || !responsePreview) item.command = {
-		command: 'ollama-autocoder.autocomplete',
+		command: 'kb-ollama-coder.autocomplete',
 		title: 'Autocomplete with Ollama',
 		arguments: [cancellationToken]
 	};
@@ -220,15 +245,15 @@ async function provideCompletionItems(document: vscode.TextDocument, position: v
 // This method is called when extension is activated
 function activate(context: vscode.ExtensionContext) {
 	// Register a completion provider for JavaScript files
-	const completionProvider = vscode.languages.registerCompletionItemProvider("*", {
-		provideCompletionItems
-	},
-		...completionKeys.split("")
-	);
+	// const completionProvider = vscode.languages.registerCompletionItemProvider("*", {
+	// 	provideCompletionItems
+	// },
+	// 	...completionKeys.split("")
+	// );
 
 	// Register a command for getting a completion from Ollama through command/keybind
 	const externalAutocompleteCommand = vscode.commands.registerTextEditorCommand(
-		"ollama-autocoder.autocomplete",
+		"kb-ollama-coder.autocomplete",
 		(textEditor, _, cancellationToken?) => {
 			// no cancellation token from here, but there is one from completionProvider
 			autocompleteCommand(textEditor, cancellationToken);
@@ -236,9 +261,8 @@ function activate(context: vscode.ExtensionContext) {
 	);
 
 	// Add the commands & completion provider to the context
-	context.subscriptions.push(completionProvider);
+	// context.subscriptions.push(completionProvider);
 	context.subscriptions.push(externalAutocompleteCommand);
-
 }
 
 // This method is called when extension is deactivated
