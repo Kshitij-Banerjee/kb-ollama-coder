@@ -19,7 +19,7 @@ let continueInline: boolean | undefined;
 function updateVSConfig() {
 	VSConfig = vscode.workspace.getConfiguration("kb-ollama-coder");
 	apiEndpoint = VSConfig.get("endpoint") || "http://localhost:11434/api/generate";
-	apiModel = VSConfig.get("model") || "deepseek-coder:33b-instruct";
+	apiModel = VSConfig.get("model") || "deepseek-coder:instruct";
 	apiMessageHeader = VSConfig.get("message header") || "";
 	numPredict = VSConfig.get("max tokens predicted") || 1000;
 	promptWindowSize = VSConfig.get("prompt window size") || 2000;
@@ -46,7 +46,7 @@ function messageHeaderSub(document: vscode.TextDocument) {
 }
 
 const outputChannel = vscode.window.createOutputChannel('kb-autocoder');
-function logPrompt(prompt: string) {
+function log(prompt: string) {
 	outputChannel.append(prompt);
 }
 
@@ -57,30 +57,31 @@ async function autocompleteCommand(textEditor: vscode.TextEditor, cancellationTo
 
 	let prompt = '';
 	// Add message header
-	prompt += `${messageHeaderSub(document)}\n\n}`
+	prompt += `${messageHeaderSub(document)}\n\n}`;
 
 	// Add other open documents
 	let others = await vscode.workspace.textDocuments;
-	others.filter((other) => other !== document);
+	others = others.filter((other) => other !== document);
 
 	others.forEach((otherDoc) => {
 		if( otherDoc.uri.scheme === 'file') {
 			const relativePath = vscode.workspace.asRelativePath(otherDoc.uri);
-			prompt += `// ${relativePath}\n`
-			prompt += `${otherDoc.getText()}\n\n`
+			log('FILE added to context: ' + relativePath);
+			prompt += `// ${relativePath}\n`;
+			prompt += `${otherDoc.getText()}\n\n`;
 		}
 	});
 
 	// Get the current prompt
 	const relativePath = vscode.workspace.asRelativePath(document.uri);
-	prompt += `// ${relativePath}\n`
-	prompt = document.getText(new vscode.Range(document.lineAt(0).range.start, position));
+	prompt += `// ${relativePath}\n`;
+	prompt += document.getText(new vscode.Range(document.lineAt(0).range.start, position));
 
 	// Substring to max allowed context window length
 	prompt = prompt.substring(Math.max(0, prompt.length - promptWindowSize), prompt.length);
 
 
-	logPrompt(prompt);
+	log(prompt);
 
 	// Show a progress message
 	vscode.window.withProgress(
