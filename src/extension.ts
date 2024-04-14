@@ -56,8 +56,6 @@ async function autocompleteCommand(textEditor: vscode.TextEditor, cancellationTo
 	const position = textEditor.selection.active;
 
 	let prompt = '';
-	// Add message header
-	prompt += `${messageHeaderSub(document)}\n\n}`;
 
 	// Add other open documents
 	let others = await vscode.workspace.textDocuments;
@@ -76,6 +74,9 @@ async function autocompleteCommand(textEditor: vscode.TextEditor, cancellationTo
 	const relativePath = vscode.workspace.asRelativePath(document.uri);
 	prompt += `// ${relativePath}\n`;
 	prompt += document.getText(new vscode.Range(document.lineAt(0).range.start, position));
+
+	// Add prompt header, Example: "You need first to write a step-by-step outline and then write the code."
+	prompt += `${messageHeaderSub(document)}\n\n}`;
 
 	// Substring to max allowed context window length
 	prompt = prompt.substring(Math.max(0, prompt.length - promptWindowSize), prompt.length);

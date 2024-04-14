@@ -59,7 +59,7 @@
 				"kb-ollama-coder.message header": {
 					"type": "string",
 					"editPresentation": "multilineText",
-					"default": "The following is a complete {LANG} file named {FILE_NAME} in the project {PROJECT_NAME}. Anything NOT code is written as a CODE COMMENT. \n\n```\n",
+					"default": "You need to first write a step-by-step outline and then write the code. The following is a complete {LANG} file named {FILE_NAME} in the project {PROJECT_NAME}. Anything NOT code is written as a CODE COMMENT. \n\n```\n",
 					"description": "Pseudo-system prompt, optimized for code completion. It is recommended to keep the format the same if modified. Leave blank for no formatting (raw)."
 				},
 				"kb-ollama-coder.max tokens predicted": {
