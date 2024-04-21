@@ -101,6 +101,26 @@
 					"type": "number",
 					"default": 0.1,
 					"description": "Temperature of the model. It is recommended to set it lower than you would for dialogue."
+				},
+				"kb-ollama-coder.bearerKey": {
+					"type": "string",
+					"default": "",
+					"description": "Any authorization bearer key to pass to the api"
+				},
+				"kb-ollama-coder.useOpenAiSpec": {
+					"type": "boolean",
+					"default": false,
+					"description": "whether to use open ai style completion"
+				},
+				"kb-ollama-coder.baseUrl": {
+					"type": "string",
+					"default": "",
+					"description": "The base URL for openai style completions"
+				},
+				"kb-ollama-coder.apiKey": {
+					"type": "string",
+					"default": "",
+					"description": "Any API key to be passed to open ai completions api"
 				}
 			}
 		},
@@ -123,6 +143,7 @@
 		"@typescript-eslint/eslint-plugin": "^6.7.0",
 		"@typescript-eslint/parser": "^6.7.0",
 		"eslint": "^8.26.0",
+		"openai": "^4.38.2",
 		"typescript": "^5.3.2",
 		"vsce": "^2.15.0"
 	},

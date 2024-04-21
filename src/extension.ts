@@ -1,7 +1,7 @@
-// Original script was GPT4 but it has been deeply Ship of Theseused. 
-
 import * as vscode from "vscode";
 import axios from "axios";
+import OPENAI, { OpenAI } from "openai";
+import { Stream } from "openai/streaming";
 
 let VSConfig: vscode.WorkspaceConfiguration;
 let apiEndpoint: string;
@@ -15,6 +15,9 @@ let responsePreview: boolean | undefined;
 let responsePreviewMaxTokens: number;
 let responsePreviewDelay: number;
 let continueInline: boolean | undefined;
+let bearerKey: string | undefined;
+let client: OpenAI; 
+let useOpenAiSpec: boolean;
 
 function updateVSConfig() {
 	VSConfig = vscode.workspace.getConfiguration("kb-ollama-coder");
@@ -29,7 +32,15 @@ function updateVSConfig() {
 	responsePreviewDelay = VSConfig.get("preview delay") || 0; // Must be || 0 instead of || [default] because of truthy
 	continueInline = VSConfig.get("continue inline");
 	apiTemperature = VSConfig.get("temperature") || 0.5;
+	bearerKey = VSConfig.get("bearerKey");
+	client = new OpenAI({
+		apiKey: VSConfig.get("apiKey"),
+		baseURL: VSConfig.get("baseUrl")
+	});
+	useOpenAiSpec = VSConfig.get("useOpenAiSpec") || false;
 }
+
+
 
 updateVSConfig();
 
@@ -47,7 +58,9 @@ function messageHeaderSub(document: vscode.TextDocument) {
 
 const outputChannel = vscode.window.createOutputChannel('kb-autocoder');
 function log(prompt: string) {
-	outputChannel.append(prompt);
+	outputChannel.append(prompt + '\n');
+	outputChannel.append(apiModel + '\n');
+	outputChannel.append('useOpenAiSpec' + useOpenAiSpec + '\n');
 }
 
 // internal function for autocomplete, not directly exposed
@@ -59,41 +72,116 @@ async function autocompleteCommand(textEditor: vscode.TextEditor, cancellationTo
 
 	// Add other open documents
 	let others = await vscode.workspace.textDocuments;
-	others = others.filter((other) => other !== document);
+	others = others
+	.filter((other) => other !== document)
+	.filter((other) => other.uri.scheme === 'file');
 
 	others.forEach((otherDoc) => {
 		if( otherDoc.uri.scheme === 'file') {
 			const relativePath = vscode.workspace.asRelativePath(otherDoc.uri);
 			log('FILE added to context: ' + relativePath);
-			prompt += `// ${relativePath}\n`;
+			prompt += `// [FILE-NAME] ${relativePath}\n`; // Use a custom [FILE-NAME] token for new file detection
 			prompt += `${otherDoc.getText()}\n\n`;
 		}
 	});
 
 	// Get the current prompt
 	const relativePath = vscode.workspace.asRelativePath(document.uri);
-	prompt += `// ${relativePath}\n`;
+	prompt += `// [FILE-NAME] ${relativePath}\n`;
 	prompt += document.getText(new vscode.Range(document.lineAt(0).range.start, position));
 
 	// Add prompt header, Example: "You need first to write a step-by-step outline and then write the code."
-	prompt += `${messageHeaderSub(document)}\n\n}`;
+	// prompt += `${messageHeaderSub(document)}\n\n}`;
 
 	// Substring to max allowed context window length
 	prompt = prompt.substring(Math.max(0, prompt.length - promptWindowSize), prompt.length);
 
-
 	log(prompt);
 
-	// Show a progress message
+	if (!useOpenAiSpec) {
+    // Show a progress message
+    apiBasedCompletion(cancellationToken, prompt, position, document, textEditor);
+  } else {
+		const stopCommand = ["[DONE]", "</s>", "<|EOT|>", "<|begin_of_sentence|>", "<|end_of_sentence|>", "[INST]"];
+		vscode.window.withProgress(
+			{
+				location: vscode.ProgressLocation.Notification,
+				title: "KB Autocoder",
+				cancellable: true,
+			},
+			async (progress, progressCancellationToken) => {
+				//tracker
+				let currentPosition = position;
+				try {
+					const stream = await client.completions.create({
+						stream: true,
+						n: 1,
+						best_of: 1,
+						model: apiModel,
+						prompt: prompt,
+						stop: stopCommand,
+						temperature: apiTemperature,
+						max_tokens: numPredict, 
+						frequency_penalty: 0,
+						top_p: apiTemperature,
+					});
+					cancellationToken?.onCancellationRequested(() => {
+						stream.controller.abort();
+					});
+					progressCancellationToken.onCancellationRequested(() => {
+						stream.controller.abort();
+					});
+					for await(const part of stream) {
+						const completion = part.choices[0]?.text;
+						// outputChannel.append("COMPLETION: ");
+						// outputChannel.append(completion + '\n');
+						// lastToken = completion;
+						if (stopCommand.includes(completion)) {
+							return;
+						}
+
+						//complete edit for token
+						const edit = new vscode.WorkspaceEdit();
+						edit.insert(document.uri, currentPosition, completion);
+						await vscode.workspace.applyEdit(edit);
+
+						// Move the cursor to the end of the completion
+						const completionLines = completion.split("\n");
+						const newPosition = new vscode.Position(
+							currentPosition.line + completionLines.length - 1,
+							(completionLines.length > 1 ? 0 : currentPosition.character) +
+							completionLines[completionLines.length - 1].length
+						);
+						const newSelection = new vscode.Selection(position, newPosition);
+						currentPosition = newPosition;
+
+						// completion bar
+						progress.report({
+							message: "Generating...",
+							increment: 1 / (numPredict / 100),
+						});
+
+						// move cursor
+						textEditor.selection = newSelection;
+					}
+				} catch(e) {
+					console.error(e);
+				}
+			}
+		);
+	}
+}
+
+function apiBasedCompletion(cancellationToken: vscode.CancellationToken | undefined, prompt: string, position: vscode.Position, document: vscode.TextDocument, textEditor: vscode.TextEditor) {
 	vscode.window.withProgress(
 		{
 			location: vscode.ProgressLocation.Notification,
-			title: "Ollama Autocoder",
+			title: "KB Autocoder",
 			cancellable: true,
 		},
 		async (progress, progressCancellationToken) => {
 			try {
-				progress.report({ message: "Sending to ollam..." });
+				progress.report({ message: "Sending to autcoder..." });
 
 				let axiosCancelPost: () => void;
 				const axiosCancelToken = new axios.CancelToken((c) => {
@@ -101,88 +189,97 @@ async function autocompleteCommand(textEditor: vscode.TextEditor, cancellationTo
 						c("Autocompletion request terminated by user cancel");
 					};
 					axiosCancelPost = cancelPost;
-					if (cancellationToken) cancellationToken.onCancellationRequested(cancelPost);
+					if (cancellationToken)
+						cancellationToken.onCancellationRequested(cancelPost);
 					progressCancellationToken.onCancellationRequested(cancelPost);
 					vscode.workspace.onDidCloseTextDocument(cancelPost);
 				});
 
 				// Make a request to the ollama.ai REST API
-				const response = await axios.post(apiEndpoint, {
-					model: apiModel, // Change this to the model you want to use
-					prompt: prompt,
-					stream: true,
-					raw: true,
-					options: {
-						num_predict: numPredict,
-						temperature: apiTemperature,
-						stop: ["```"]
+				const stopCommands = ["```", "[DONE]", "</s>", "<|EOL|>"];
+				const response = await axios.post(
+					apiEndpoint,
+					{
+						model: apiModel, // Change this to the model you want to use
+						prompt: prompt,
+						stream: true,
+						raw: true,
+						options: {
+							num_predict: numPredict,
+							temperature: apiTemperature,
+							stop: stopCommands,
+						},
+					},
+					{
+						headers: {
+							Authorization: `Bearer ${bearerKey}`,
+							"Content-Type": "application/json",
+						},
+						cancelToken: axiosCancelToken,
+						responseType: "stream",
 					}
-				}, {
-					cancelToken: axiosCancelToken,
-					responseType: 'stream'
-				}
 				);
 
 				//tracker
 				let currentPosition = position;
 
-				response.data.on('data', async (d: Uint8Array) => {
-					progress.report({ message: "Generating..." });
+				response.data.on("data", async (d: Uint8Array) => {
+          progress.report({ message: "Generating..." });
 
-					// Get a completion from the response
-					const completion: string = JSON.parse(d.toString()).response;
+          // Get a completion from the response
+          const completion: string = JSON.parse(d.toString()).response;
 
-					outputChannel.append('COMPLETION: ');
-					outputChannel.append(d.toString());
-					// lastToken = completion;
-					
-					if (completion === "") {
-						return;
-					}
+          // outputChannel.append("completion response: " + d.toString() + "\n");
+          // lastToken = completion;
+          if (stopCommands.includes(completion)) {
+            axiosCancelPost();
+            return;
+          }
 
-					//complete edit for token
-					const edit = new vscode.WorkspaceEdit();
-					edit.insert(document.uri, currentPosition, completion);
-					await vscode.workspace.applyEdit(edit);
+          //complete edit for token
+          const edit = new vscode.WorkspaceEdit();
+          edit.insert(document.uri, currentPosition, completion);
+          await vscode.workspace.applyEdit(edit);
 
-					// Move the cursor to the end of the completion
-					const completionLines = completion.split("\n");
-					const newPosition = new vscode.Position(
-						currentPosition.line + completionLines.length - 1,
-						(completionLines.length > 1 ? 0 : currentPosition.character) + completionLines[completionLines.length - 1].length
-					);
-					const newSelection = new vscode.Selection(
-						position,
-						newPosition
-					);
-					currentPosition = newPosition;
+          // Move the cursor to the end of the completion
+          const completionLines = completion.split("\n");
+          const newPosition = new vscode.Position(
+            currentPosition.line + completionLines.length - 1,
+            (completionLines.length > 1 ? 0 : currentPosition.character) +
+              completionLines[completionLines.length - 1].length
+          );
+          const newSelection = new vscode.Selection(position, newPosition);
+          currentPosition = newPosition;
 
-					// completion bar
-					progress.report({ message: "Generating...", increment: 1 / (numPredict / 100) });
+          // completion bar
+          progress.report({
+            message: "Generating...",
+            increment: 1 / (numPredict / 100),
+          });
 
-					// move cursor
-					textEditor.selection = newSelection;
-				});
+          // move cursor
+          textEditor.selection = newSelection;
+        });
 
 				// Keep cancel window available
 				const finished = new Promise((resolve) => {
-					response.data.on('end', () => {
-						progress.report({ message: "Ollama completion finished." });
+					response.data.on("end", () => {
+						progress.report({ message: "Autocoder completion finished." });
 						resolve(true);
 					});
-					axiosCancelToken.promise.finally(() => { // prevent notification from freezing on user input cancel
+					axiosCancelToken.promise.finally(() => {
+						// prevent notification from freezing on user input cancel
 						resolve(false);
 					});
 				});
 
 				await finished;
-
 			} catch (err: any) {
 				// Show an error message
 				vscode.window.showErrorMessage(
-					"Ollama encountered an error: " + err.message
+					"Autocoder encountered an error: " + err.message
 				);
-				console.log(err);
+				outputChannel.append(err.message);
 			}
 		}
 	);
@@ -218,6 +315,9 @@ async function provideCompletionItems(document: vscode.TextDocument, position: v
 				stop: ['\n', '```']
 			}
 		}, {
+			headers: {
+				Authorization: `Bearer ${bearerKey}`,
+			},
 			cancelToken: new axios.CancelToken((c) => {
 				const cancelPost = function () {
 					c("Autocompletion request terminated by completion cancel");
@@ -274,3 +374,7 @@ module.exports = {
 	activate,
 	deactivate,
 };
+function parseApiData(d: Uint8Array): string {
+	return JSON.parse(d.toString()).response;
+}
+
